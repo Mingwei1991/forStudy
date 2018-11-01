@@ -2,12 +2,12 @@
 val sparkVersion = "2.3.0"
 
 lazy val sparkSettings = Seq(
-    organization := "com.freedom",
+    organization := "org.freedom",
     version := "0.1",
     scalaVersion := "2.11.12",
     libraryDependencies := Seq(
         "org.scala-lang" % "scala-reflect" % scalaVersion.value % "provided",
-        "org.apache.spark" %% "spark-mllib" % sparkVersion % "provided",
+        "org.apache.spark" %% "spark-mllib" % sparkVersion ,
         "org.apache.spark" % "spark-sql_2.11" % sparkVersion % "provided",
         "org.apache.spark" % "spark-streaming_2.11" % sparkVersion % "provided",
         "org.apache.spark" % "spark-streaming-kafka-0-10_2.11" % sparkVersion % "provided"
