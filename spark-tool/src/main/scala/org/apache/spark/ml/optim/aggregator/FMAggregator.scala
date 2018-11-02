@@ -25,7 +25,7 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
         s
     }
 
-    private val coefficientSize =bcCoefficients.value.size
+    private val coefficientSize = bcCoefficients.value.size
 
     protected override val dim: Int = coefficientSize
 
@@ -41,7 +41,41 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
     /**
       * gradient of loss function at value = error
       * */
-    def lossGradient(error: Double): Double
+    def gradient(combinationSum: Double, label: Double): Double
+
+    def loss(combinationSum: Double, label: Double): Double
+
+    def updateInPlace(features: Vector, weight: Double, label: Double): Unit = {
+        // reduce cost of visit array data
+        val localFeatureStd = bcFeaturesStd.value
+        val localCoefficients = coefficientsArray
+        val localGradientArray = gradientSumArray
+
+        // compute combination sum
+        var sum = 0.0
+        if (fitLinear) {
+            features.foreachActive { (index, value) =>
+                print(index)
+            }
+        }
+
+
+
+    }
+
+    def add(instance: Instance): A = {
+        val Instance(label, weight, features) = instance
+        require(numFeatures == features.size, s"Dimensions mismatch when adding new instance." +
+                s" Expecting $numFeatures but got ${features.size}.")
+        require(weight >= 0.0, s"instance weight, $weight has to be >= 0.0")
+
+        if (weight == 0.0) return this
+
+        updateInPlace(features, weight, label)
+        weightSum += weight
+
+        this
+    }
 
 }
 
