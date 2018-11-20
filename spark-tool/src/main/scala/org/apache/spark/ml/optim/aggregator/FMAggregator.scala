@@ -27,7 +27,7 @@ import org.apache.spark.ml.linalg.{DenseVector, Vector}
 import org.apache.spark.ml.optim.aggregator.{DifferentiableLossAggregator => DLA}
 import org.apache.spark.mllib.util.MLUtils
 
-private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
+private[ml] abstract class FMAggregatorBase[Agg <: DLA[Instance, Agg]](
                                                                           numFeatures: Int,
                                                                           vectorSize: Int,
                                                                           fitBias: Boolean,
@@ -35,8 +35,8 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
                                                                           fitIntercept: Boolean
                                                                   )
                                                                   (bcCoefficients: Broadcast[Vector])
-        extends DLA[Instance, A] {
-    self: A => // enforce classes that extend this to be the same type as `A`
+        extends DLA[Instance, Agg] {
+    self: Agg => // enforce classes that extend this to be the same type as `Agg`
 
     @transient private lazy val coefficientsArray: Array[Double] = bcCoefficients.value match {
         case DenseVector(values) => values
@@ -59,11 +59,11 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
     /**
       * gradient of loss function at value = error
       **/
-    def lossGradient(combinationSum: Double, label: Double): Double
+    protected def raw2lossGradient(combinationSum: Double, label: Double): Double
 
-    def loss(combinationSum: Double, label: Double): Double
+    protected def raw2loss(combinationSum: Double, label: Double): Double
 
-    def add(instance: Instance): A = {
+    def add(instance: Instance): Agg = {
         val Instance(label, weight, features) = instance
         require(numFeatures == features.size, s"Dimensions mismatch when adding new instance." +
                 s" Expecting $numFeatures but got ${features.size}.")
@@ -77,15 +77,13 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
         this
     }
 
-    def updateInPlace(features: Vector, weight: Double, label: Double): Unit = {
+    private def updateInPlace(features: Vector, weight: Double, label: Double): Unit = {
         // reduce cost of visit array data
         val localCoefficients = coefficientsArray
         val localGradientArray = gradientSumArray
         // compute combination sum
         var combinationSum = 0.0
         var originPosition = 0
-        // combination gradient
-        val combinationGradient = new Array[Double](dim)
         // reuse index i
         var i = 0
 
@@ -96,9 +94,9 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
                 var norm2 = 0.0
                 while (i < vectorSize) {
                     val coefficientPosition = originPosition + i
-                    vectorSum(i) += value * localCoefficients(coefficientPosition)
-                    norm2 += localCoefficients(coefficientPosition) * localCoefficients(coefficientPosition)
-                    combinationGradient(coefficientPosition) -= value * value * localCoefficients(coefficientPosition)
+                    val t = localCoefficients(coefficientPosition)
+                    vectorSum(i) += value * t
+                    norm2 += t * t
                     i += 1
                 }
                 combinationSum -= value * value * norm2
@@ -113,37 +111,20 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
         i = 0
 
         combinationSum /= 2.0
-        // calculate latent vector gradient
-        features.foreachActive { (index, value) =>
-            if (value != 0.0) {
-                val p = index * vectorSize
-                while (i < vectorSize) {
-                    combinationGradient(p + i) += value * vectorSum(i)
-                    i += 1
-                }
-                i = 0
-            }
-        }
 
         originPosition = numFeatures * vectorSize
-
+        var sum = 0.0
         if (fitBias) {
-            var sum = 0.0
             features.foreachActive { (index, value) =>
                 if (value != 0.0) {
                     val t = localCoefficients(originPosition + index) * value
                     sum += t
-                    combinationGradient(originPosition + index) -= t * value
                     combinationSum -= t * t / 2.0
                 }
 
             }
 
             combinationSum += sum * sum / 2
-            // calculate gradient
-            features.foreachActive { (index, value) =>
-                combinationGradient(originPosition + index) += sum * value
-            }
             originPosition += numFeatures
         }
 
@@ -151,27 +132,43 @@ private[ml] abstract class FMAggregatorBase[A <: DLA[Instance, A]](
             features.foreachActive { (index, value) =>
                 if (value != 0.0) {
                     combinationSum += localCoefficients(originPosition + index) * value
-                    combinationGradient(originPosition + index) += value
+                    localGradientArray(originPosition + index) += value
                 }
             }
         }
 
         if (fitIntercept) {
             combinationSum += localCoefficients(dim - 1)
-            combinationGradient(dim - 1) += 1
+            localGradientArray(dim - 1) += 1
         }
         // update loss
-        lossSum += weight * loss(combinationSum, label)
+        lossSum += weight * raw2loss(combinationSum, label)
 
-        val multiplier = weight * lossGradient(combinationSum, label)
-        while (i < dim) {
-            localGradientArray(i) += multiplier * combinationGradient(i)
-            i += 1
+        // update gradient
+        val multiplier = weight * raw2lossGradient(combinationSum, label)
+        features.foreachActive { (index, value) =>
+            if (value != 0.0) {
+                originPosition = index * vectorSize
+                while (i < vectorSize) {
+                    val coefficientPosition = originPosition + i
+                    localGradientArray(coefficientPosition) -= multiplier * value * value * localCoefficients(coefficientPosition)
+                    localGradientArray(coefficientPosition) += multiplier * value * vectorSum(i)
+                    i += 1
+                }
+                i = 0
+            }
         }
-
-
+        originPosition = numFeatures * vectorSize
+        if (fitBias) {
+            features.foreachActive { (index, value) =>
+                if (value != 0.0) {
+                    val coefficientPosition = originPosition + index
+                    localGradientArray(coefficientPosition) -= multiplier * value * value * localCoefficients(coefficientPosition)
+                    localGradientArray(coefficientPosition) += multiplier * value * sum
+                }
+            }
+        }
     }
-
 }
 
 private[ml] abstract class MarginFMAggregator[A <: FMAggregatorBase[A]](
@@ -187,13 +184,13 @@ private[ml] abstract class MarginFMAggregator[A <: FMAggregatorBase[A]](
     /**
       * margin type loss
       **/
-    def loss(margin: Double): Double
+    protected def loss(margin: Double): Double
 
-    def lossGradient(margin: Double): Double
+    protected def lossGradient(margin: Double): Double
 
-    override def lossGradient(combinationSum: Double, label: Double): Double = lossGradient(combinationSum - label)
+    override  protected def raw2lossGradient(combinationSum: Double, label: Double): Double = lossGradient(combinationSum - label)
 
-    override def loss(combinationSum: Double, label: Double): Double = loss(combinationSum - label)
+    override protected def raw2loss(combinationSum: Double, label: Double): Double = loss(combinationSum - label)
 }
 
 private[ml] class LeastSquaresFMAggregator(
@@ -208,9 +205,9 @@ private[ml] class LeastSquaresFMAggregator(
     /**
       * margin type loss
       **/
-    override def loss(margin: Double): Double = margin * margin / 2
+    override protected def loss(margin: Double): Double = margin * margin / 2
 
-    override def lossGradient(margin: Double): Double = margin
+    override protected def lossGradient(margin: Double): Double = margin
 }
 
 private[ml] class LogisticFMAggregator(
@@ -228,10 +225,10 @@ private[ml] class LogisticFMAggregator(
     /**
       * gradient of loss function at value = error
       **/
-    override def lossGradient(combinationSum: Double, label: Double): Double = 1.0 / (1.0 + math.exp(-combinationSum)) - label
+    override protected def raw2lossGradient(combinationSum: Double, label: Double): Double = 1.0 / (1.0 + math.exp(-combinationSum)) - label
 
 
-    override def loss(combinationSum: Double, label: Double): Double = {
+    override protected def raw2loss(combinationSum: Double, label: Double): Double = {
         if (label > 0.0) {
              MLUtils.log1pExp(-combinationSum)
         }
@@ -240,7 +237,6 @@ private[ml] class LogisticFMAggregator(
         }
     }
 }
-
 
 
 

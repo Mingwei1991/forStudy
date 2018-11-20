@@ -142,6 +142,7 @@ private[regression] trait FMParams extends HasRegParam with HasElasticNetParam w
 }
 
 // TODO load a pre-trained model for retrain
+// TODO implement setStandardization
 class FM(
                 override val uid: String
         )
@@ -315,7 +316,7 @@ class FM(
                                             fitting: Boolean, featuresDataType: DataType): StructType = {
         val parentSchema = super.validateAndTransformSchema(schema, fitting, featuresDataType)
         if ($(forBinaryClassification) && $(probabilityCol).isEmpty) {
-            SchemaUtils.appendColumn(parentSchema, $(probabilityCol), new StructType(Array(StructField("_1", DoubleType, nullable = false), StructField("_2", DoubleType, nullable = false))))
+           SchemaUtils.appendColumn(parentSchema, $(probabilityCol), new VectorUDT)
         } else {
             parentSchema
         }
@@ -395,8 +396,7 @@ class FM(
             summarizer
         }
 
-        val numSamples = featureSummarizer.count
-        instr.logNamedValue("sample size", numSamples)
+        instr.logNamedValue("sample size", featureSummarizer.count)
 
         val numFeatures = instances.first().features.size
         instr.logNumFeatures(numFeatures)
@@ -445,6 +445,7 @@ class FM(
         // select optimize according to L1 regularization
         // The memory used in L-BFGS or OWLQN
         val memory = 10
+        // TODO support more optimizers
         val optimizer = if (regParamL1 == 0.0) {
             new BreezeLBFGS[BDV[Double]]($(maxIter), memory, $(tol))
         } else {
@@ -476,12 +477,14 @@ class FM(
 
         val arrayBuilder = mutable.ArrayBuilder.make[Double]
         var state: optimizer.State = null
+        var i = 0
         while (states.hasNext) {
             state = states.next()
             arrayBuilder += state.adjustedValue
+            i += 1
         }
         if (state == null) {
-            val msg = s"${optimizer.getClass.getName} failed."
+            val msg = s"${optimizer.getClass.getName} failed. The optimizer iterated $i times."
             logError(msg)
             throw new SparkException(msg)
         }
@@ -617,6 +620,7 @@ class FMModel private[ml](
         }
         set(bin, value)
     }
+    setDefault(bin, 0)
     override def getBin: Int = {
         if (!$(forBinaryClassification)) {
             throw new SparkException(s"Bin is only valid for FM binary classification Model, " +
@@ -647,14 +651,20 @@ class FMModel private[ml](
         if (!$(forBinaryClassification) || trainingSummary.isEmpty) {
             throw new SparkException(s"There is no training binary summary.")
         }
-        trainingSummary.asInstanceOf[BinaryFMTrainingSummary]
+        trainingSummary match {
+            case Some(x: BinaryFMTrainingSummary) => x
+            case _ => throw new SparkException("There is no training binary summary.")
+        }
     }
 
     def regressionSummary: RegressionFMTrainingSummary = {
         if ($(forBinaryClassification) || trainingSummary.isEmpty) {
             throw new SparkException(s"There is no training regression summary.")
         }
-        trainingSummary.asInstanceOf[RegressionFMTrainingSummary]
+        trainingSummary match {
+            case Some(x: RegressionFMTrainingSummary) => x
+            case _ => throw new SparkException("There is no training regression summary.")
+        }
     }
 
     def binaryEvaluate(dataset: Dataset[_]): BinaryFMSummary = {
@@ -699,30 +709,24 @@ class FMModel private[ml](
         var numColsOutput = 0
         if ($(forBinaryClassification)) {
             if ($(probabilityCol).nonEmpty) {
-                val probUDF = udf { features: Any =>
-                    probability(features.asInstanceOf[Vector])
-                }
-                outputData = outputData.withColumn($(probabilityCol), probUDF(col(getFeaturesCol)))
+                val probCol = udf(probability _).apply(col(getFeaturesCol))
+                outputData = outputData.withColumn($(probabilityCol), probCol)
                 numColsOutput += 1
             }
             if ($(predictionCol).nonEmpty) {
                 val predCol = if ($(probabilityCol).nonEmpty) {
                     udf(probability2prediction _ ).apply(col($(probabilityCol)))
                 } else {
-                    val raw2predUDF =  udf { features: Any =>
-                        raw2prediction(features.asInstanceOf[Vector])
-                    }
-                    raw2predUDF(col(getFeaturesCol))
+                    udf(raw2prediction _ ).apply(col(getFeaturesCol))
                 }
                 outputData = outputData.withColumn($(predictionCol), predCol)
                 numColsOutput += 1
             }
         } else {
             if ($(predictionCol).nonEmpty) {
-                val regressionUDF = udf { features: Any =>
-                    predictionRaw(features.asInstanceOf[Vector])
-                }
-                outputData = outputData.withColumn($(predictionCol), regressionUDF(col(getFeaturesCol)))
+                val predCol = udf(predictionRaw _).apply(col(getFeaturesCol))
+
+                outputData = outputData.withColumn($(predictionCol), predCol)
                 numColsOutput += 1
             }
         }
@@ -790,13 +794,13 @@ class FMModel private[ml](
         combinationSum
     }
 
-    protected def probability(features: Vector): (Double, Double) = {
+    protected def probability(features: Vector): Vector = {
         val m = predictionRaw(features)
-        (1.0 / (1.0 + math.exp(m)), 1.0 / (1.0 + math.exp(-m)))
+        Vectors.dense(1.0 / (1.0 + math.exp(m)), 1.0 / (1.0 + math.exp(-m)))
     }
 
-    protected def probability2prediction(value: (Double, Double)): Double = {
-        if (value._2 >= $(threshold)) {
+    protected def probability2prediction(value: Vector): Double = {
+        if (value(1) >= $(threshold)) {
             1.0
         } else {
             0.0
@@ -1052,7 +1056,7 @@ sealed trait BinaryFMSummary extends FMSummary {
       * the first column (resp. row) means predicted (resp. true) label is positive
       * while the second is negative.
       */
-    val confusionMatrix: Matrix = {
+    lazy val confusionMatrix: Matrix = {
         val m = binaryclassMetrics.confusionMatrix
         Matrices.dense(2, 2, Array(m(1, 1), m(0, 1), m(1, 0), m(0, 0)))
 
@@ -1067,7 +1071,7 @@ sealed trait BinaryFMSummary extends FMSummary {
     }
     // BinaryClassificationMetrics. For now the default is set to 100.
     @transient private val binaryMetrics = new BinaryClassificationMetrics(
-        predictions.select(col(probabilityCol), col(labelCol).cast(DoubleType)).rdd.map {
+        predictions.select(col(probabilityCol), col(labelCol)).rdd.map {
             case Row(score: Vector, label: Double) => (score(1), label)
         }, bin
     )
@@ -1260,7 +1264,7 @@ private class BinaryFMTrainingSummaryImpl private[regression](
                                                                      override val objectiveHistory: Array[Double]
                                                              )
         extends BinaryFMSummaryImpl(predictions, probabilityCol, predictionCol, labelCol, featuresCol, bin)
-                with FMTrainingSummary
+                with BinaryFMTrainingSummary
 
 //regression results evaluated on a dataset.
 /**
