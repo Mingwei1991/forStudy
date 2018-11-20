@@ -25,17 +25,16 @@ import org.apache.spark.ml.classification.{ClassificationModel, Classifier, Clas
 import org.apache.spark.ml.linalg._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.param.{DoubleParam, ParamValidators}
-import org.apache.spark.ml.util.SchemaUtils
 import org.apache.spark.sql.Dataset
 import org.apache.spark.sql.types.{DataType, StructType}
 
-private[classification] trait PUClassfierParam extends ClassifierParams
+private[classification] trait PUClassifierParams extends ClassifierParams
 with HasThreshold {
     /**
       *
       * */
     final val pi = new DoubleParam(this, "pi",
-        "the (expect) percentage of positive class", ParamValidators.inRange(0, 1))
+        "the (expect) weighted percentage of positive classes", ParamValidators.inRange(0, 1))
 
     def getPi: Double = $(pi)
 
@@ -46,13 +45,13 @@ with HasThreshold {
                                                              fitting: Boolean,
                                                              featuresDataType: DataType): StructType = {
         val parentSchema = super.validateAndTransformSchema(schema, fitting, featuresDataType)
-        SchemaUtils.appendColumn(parentSchema, $(rawPredictionCol), new VectorUDT)
+        parentSchema
     }
 
 }
 
-abstract class PUClassfier[E <: PUClassfier[E, M], M <: PUClassfierModel[M]]
-        extends Classifier[Vector, E, M] with PUClassfierParam {
+abstract class PUClassifier[E <: PUClassifier[E, M], M <: PUClassifierModel[M]]
+        extends Classifier[Vector, E, M] with PUClassifierParams {
 
     // override method and val from super class involve numClasses
     override final def getNumClasses(dataset: Dataset[_], maxNumClasses: Int): Int = 2
@@ -61,7 +60,10 @@ abstract class PUClassfier[E <: PUClassfier[E, M], M <: PUClassfierModel[M]]
 
 }
 
-abstract class PUClassfierModel[M <: PUClassfierModel[M]]
-        extends ClassificationModel[Vector, M] with PUClassfierParam {
+abstract class PUClassifierModel[M <: PUClassifierModel[M]]
+        extends ClassificationModel[Vector, M] with PUClassifierParams {
     override final def numClasses: Int = 2
 }
+
+// todo
+trait PUClassifierTrainingSummary extends Serializable

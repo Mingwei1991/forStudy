@@ -21,6 +21,59 @@
 
 package org.apache.spark.ml.optim.aggregator
 
-class PUAggregator {
+import org.apache.spark.ml.feature.Instance
+import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.ml.optim.aggregator.{DifferentiableLossAggregator => DLA}
 
+// TODO
+/**
+  * Only support linear additional term for labeled positive samples
+  * */
+private[ml] abstract class PUAggregator[Agg <: PUAggregator[Agg]]
+    extends DLA[Instance, Agg] {
+    self: Agg =>
+
+    def add(instance: Instance): Agg = {
+        val Instance(label, weight, features) = instance
+        require(weight >= 0.0, s"instance weight, $weight has to be >= 0.0")
+
+        if (weight == 0.0) return this
+
+        updateInPlace(features, weight, label)
+        weightSum += weight
+        this
+    }
+
+    private def updateInPlace(features: Vector, weight: Double, label: Double): Unit = {
+        val localGradientSumArray = this.gradientSumArray
+        val (raw, rawGrad)= rawPredictionAndGradient(features)
+
+        lossSum += weight * raw2loss(raw)
+
+        var rate = weight * raw2lossGradient(raw)
+        rawGrad.foreachActive { (index, value) =>
+            localGradientSumArray(index) += rate * value
+        }
+
+        // additional update for labeled positive samples
+        if (label == 1.0) {
+            rate = additionalRate * weight
+            lossSum += rate * raw
+
+            rawGrad.foreachActive { (index, value) =>
+                if (value != 0.0) {
+                    localGradientSumArray(index) += rate * value
+                }
+            }
+        }
+    }
+
+    protected def raw2loss(raw: Double): Double
+
+    protected def raw2lossGradient(raw: Double): Double
+
+    // rate of additional term for labeled positive samples
+    protected def additionalRate: Double
+
+    protected def rawPredictionAndGradient(features: Vector): (Double, Vector)
 }

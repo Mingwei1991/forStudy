@@ -39,7 +39,7 @@ import org.apache.spark.mllib.evaluation.{BinaryClassificationMetrics, Multiclas
 import org.apache.spark.mllib.linalg.VectorImplicits._
 import org.apache.spark.mllib.stat.{MultivariateOnlineSummarizer, MultivariateStatisticalSummary}
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types.{DataType, DoubleType, StructField, StructType}
+import org.apache.spark.sql.types.{DataType, DoubleType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.VersionUtils
@@ -421,7 +421,8 @@ class FM(
         // TODO support custom regularization
         // add L2 regularization
         val l2Regularization = if (regParamL2 != 0.0) {
-            val shouldApply: Int => Boolean = idx => idx >= 0 && idx < numCoefficients
+            val u = if (getFitIntercept) numCoefficients else numCoefficients - 1
+            val shouldApply: Int => Boolean = idx => idx >= 0 && idx < u
             Some(new L2Regularization(regParamL2, shouldApply, None))
         } else {
             None

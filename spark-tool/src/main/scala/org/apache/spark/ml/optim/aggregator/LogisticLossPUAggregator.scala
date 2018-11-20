@@ -21,6 +21,25 @@
 
 package org.apache.spark.ml.optim.aggregator
 
-class LogisticLossPUAggregator {
+import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.mllib.util.MLUtils
 
+
+private[ml] abstract class LogisticLossPUAggregator(
+                                                           multiplier: Double
+                                                   )
+        extends PUAggregator[LogisticLossPUAggregator] {
+
+    protected val bcFeaturesStd: Broadcast[Array[Double]]
+
+    protected def marginAndGradient(features: Vector): (Double, Vector)
+
+    final override protected val additionalRate: Double = -multiplier
+
+    override protected def rawPredictionAndGradient(features: Vector): (Double, Vector) = marginAndGradient(features)
+
+    override protected def raw2loss(raw: Double): Double = MLUtils.log1pExp(raw)
+
+    override protected def raw2lossGradient(raw: Double): Double = 1 / (1.0 + math.exp(-raw))
 }
