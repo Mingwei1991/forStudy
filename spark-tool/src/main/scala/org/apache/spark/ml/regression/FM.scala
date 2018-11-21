@@ -937,10 +937,10 @@ private[ml] class BinaryClassSummarizer extends Serializable {
 
         if (weight == 0.0) return this
 
-        if (label == 0.0) {
+        if (label == 1.0) {
             positiveClass = (positiveClass._1 + 1, positiveClass._2 + weight)
             this
-        } else if (label == 1.0) {
+        } else if (label == 0.0) {
             negativeClass = (negativeClass._1 + 1, negativeClass._2 + weight)
             this
         } else {
