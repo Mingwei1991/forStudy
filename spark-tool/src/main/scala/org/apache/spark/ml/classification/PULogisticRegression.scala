@@ -24,12 +24,12 @@ package org.apache.spark.ml.classification
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.ml.classification.PULearning._
-import org.apache.spark.ml.linalg.{Vector, Vectors}
+import org.apache.spark.ml.linalg.{BLAS, Vector, Vectors}
 import org.apache.spark.ml.optim.aggregator.{LogisticLossPUAggregator, PULogisticRegressionAggregator}
 import org.apache.spark.ml.optim.loss.L2Regularization
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.param.{Param, ParamMap}
-import org.apache.spark.ml.util.{DefaultParamsWritable, MLWritable, MLWriter}
+import org.apache.spark.ml.util.{DefaultParamsWritable, Identifiable, MLWritable, MLWriter}
 
 // TODO set bounds on coefficients and  bound constrained optimization
 private[classification] trait PULogisticRegressionParams extends LogisticLossPUClassifierParams
@@ -40,6 +40,11 @@ class PULogisticRegression(
                                   override val uid: String
                           ) extends LogisticLossPUClassifier[PULogisticRegression, PULogisticRegressionModel]
         with PULogisticRegressionParams with DefaultParamsWritable with Logging {
+    def this() = this(Identifiable.randomUID("pulogisticregression"))
+
+    def setFitIntercept(value: Boolean): this.type = set(fitIntercept, value)
+    setDefault(fitIntercept, true)
+
 
     def setStandardization(value: Boolean): this.type = set(standardization, value)
 
@@ -123,11 +128,19 @@ class PULogisticRegressionModel private[spark](
 
     override def write: MLWriter = ???
 
-    override protected def predictRaw(features: Vector): Vector = ???
+    override protected def predictRaw(features: Vector): Vector = {
+        var margin = intercept
+        features.foreachActive { (index, value) =>
+            margin += value * coefficients(index)
+        }
+        Vectors.dense(-margin, margin)
+    }
 
     override def copy(extra: ParamMap): PULogisticRegressionModel = ???
 
-    override private[classification] def setSummary(trainSummary: Array[Double], bin: Int) = ???
+    override private[classification] def setSummary(trainSummary: Array[Double], bin: Int) = {
+        this
+    }
 
     override def hasSummary: Boolean = ???
 

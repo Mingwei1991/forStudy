@@ -39,7 +39,7 @@ import org.apache.spark.mllib.stat.MultivariateOnlineSummarizer
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.functions.{col, lit, udf}
 import org.apache.spark.sql.types.{DataType, DoubleType, StructType}
-import org.apache.spark.sql.{DataFrame, Dataset, Row}
+import org.apache.spark.sql.{Column, DataFrame, Dataset, Row}
 import org.apache.spark.storage.StorageLevel
 
 import scala.collection.mutable
@@ -61,7 +61,7 @@ abstract class LogisticLossPUClassifier[E <: LogisticLossPUClassifier[E, M], M <
         extends PUClassifier[E, M]  with LogisticLossPUClassifierParams {
 
     /** @group setParam */
-    def setProbabilityCol(value: String): M = set(probabilityCol, value).asInstanceOf[M]
+    def setProbabilityCol(value: String): E = set(probabilityCol, value).asInstanceOf[E]
     /**
       * Set the (expect) weighted percentage of positive classes.
       * Default is not set.
@@ -242,9 +242,12 @@ abstract class LogisticLossPUClassifier[E <: LogisticLossPUClassifier[E, M], M <
             throw new SparkException(msg)
         }
 
-        val parameters = state.x.toArray
+        val parameters = state.x.toArray.clone()
         if (handlePersistence) instances.unpersist()
         bcFeaturesStd.destroy()
+        0 until numFeatures foreach { index =>
+                if (featuresStd(index) != 0.0) parameters(index) = parameters(index) / featuresStd(index)
+        }
 
         copyValues(constructModel(parameters)).setParent(this).setSummary(arrayBuilder.result, 10)
     }
@@ -279,8 +282,8 @@ abstract class LogisticLossPUClassifierModel[M <: LogisticLossPUClassifierModel[
         var outputData = dataset
         var numColsOutput = 0
         if (getRawPredictionCol.nonEmpty) {
-            val predictRawUDF = udf(predictRaw _).apply(col(getFeaturesCol))
-            outputData = outputData.withColumn(getRawPredictionCol, predictRawUDF(col(getFeaturesCol)))
+            val predictRawUDF: Column = udf(predictRaw _).apply(col(getFeaturesCol))
+            outputData = outputData.withColumn(getRawPredictionCol, predictRawUDF)
             numColsOutput += 1
         }
         if (getProbabilityCol.nonEmpty) {
