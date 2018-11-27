@@ -29,40 +29,67 @@ import org.apache.spark.sql.Dataset
 import org.apache.spark.sql.types.{DataType, StructType}
 
 private[classification] trait PUClassifierParams extends ClassifierParams
-with HasThreshold {
-    /**
-      *
-      * */
-    final val pi = new DoubleParam(this, "pi",
-        "the (expect) weighted percentage of positive classes", ParamValidators.inRange(0, 1))
+  with HasThreshold {
+  /**
+    *
+    **/
+  final val pi = new DoubleParam(this, "pi",
+    "the (expect) weighted percentage of positive classes", ParamValidators.inRange(0, 1))
 
-    def getPi: Double = $(pi)
+  def getPi: Double = $(pi)
 
-    def setThreshold(value: Double): this.type = set(threshold, value)
+  /**
+    * The epsilon-insensitive loss function for unlabeled samples. If [[pi]] is much smaller than 0.5, set to a suitable value.
+    * If unsure, set epsilon=0
+    **/
+  val epsilon = new DoubleParam(this, "epsilon", "Epsilon parameter in the epsilon-insensitive loss function for unlabeled samples. Default=0.0", ParamValidators.gtEq(0.0))
 
-    override protected def validateAndTransformSchema(
-                                                             schema: StructType,
-                                                             fitting: Boolean,
-                                                             featuresDataType: DataType): StructType = {
-        val parentSchema = super.validateAndTransformSchema(schema, fitting, featuresDataType)
-        parentSchema
-    }
+  def getEpsilon: Double = $(epsilon)
+
+  def setThreshold(value: Double): this.type = set(threshold, value)
+
+  override protected def validateAndTransformSchema(
+                                                     schema: StructType,
+                                                     fitting: Boolean,
+                                                     featuresDataType: DataType): StructType = {
+    val parentSchema = super.validateAndTransformSchema(schema, fitting, featuresDataType)
+    parentSchema
+  }
 
 }
 
 abstract class PUClassifier[E <: PUClassifier[E, M], M <: PUClassifierModel[M]]
-        extends Classifier[Vector, E, M] with PUClassifierParams {
+  extends Classifier[Vector, E, M] with PUClassifierParams {
 
-    // override method and val from super class involve numClasses
-    override final def getNumClasses(dataset: Dataset[_], maxNumClasses: Int): Int = 2
+  // override method and val from super class involve numClasses
+  override final def getNumClasses(dataset: Dataset[_], maxNumClasses: Int): Int = 2
 
+  /**
+    * Set the (expected) weighted percentage of positive classes.
+    * Default is not set.
+    *
+    * Note one must set [[pi]] before fitting.
+    *
+    * @group setParam
+    **/
+  def setPi(value: Double): this.type = set(pi, value)
 
+  /**
+    * Set the epsilon-insensitive loss function for unlabeled samples.
+    * Epsilon>0 will reduce the impacts of potential positive samples which are 'very' different from labeled samples.
+    *
+    * Default is 0.0.
+    *
+    * @group setParam
+    **/
+  // TODO add a new solver for this
+//  def setEpsilon(value: Double): this.type = set(epsilon, value)
 
 }
 
 abstract class PUClassifierModel[M <: PUClassifierModel[M]]
-        extends ClassificationModel[Vector, M] with PUClassifierParams {
-    override final def numClasses: Int = 2
+  extends ClassificationModel[Vector, M] with PUClassifierParams {
+  override final def numClasses: Int = 2
 }
 
 // todo

@@ -19,26 +19,17 @@
  * @Version 0.1
  */
 
-package org.apache.spark.ml.optim.aggregator
+package org.apache.spark.ml.optim
 
-import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.mllib.util.MLUtils
+import breeze.math.MutableInnerProductModule
+import breeze.optimize.StochasticGradientDescent
 
-
-private[ml] abstract class LogisticLossPUAggregator extends PUAggregator[LogisticLossPUAggregator] {
-
-  val multiplier: Double
-
-  protected val bcFeaturesStd: Broadcast[Array[Double]]
-
-  protected def marginAndGradient(features: Vector): (Double, Vector)
-
-  final override protected val additionalRate: Double = -multiplier
-
-  override protected def rawPredictionAndGradient(features: Vector): (Double, Vector) = marginAndGradient(features)
-
-  override protected def raw2loss(raw: Double): Double = MLUtils.log1pExp(raw)
-
-  override protected def raw2lossGradient(raw: Double): Double = 1 / (1.0 + math.exp(-raw))
-}
+class MomentumGradientDescent[T]//(
+//                                  val defaultStepSize: Double,
+//                                  val maxIter: Int,
+//                                  tolerance: Double = 1E-5,
+//                                  fvalMemory: Int = 100)(implicit vs: MutableInnerProductModule[T, Double])
+//
+//  extends StochasticGradientDescent {
+//
+//}
